@@ -1,71 +1,134 @@
-// PluginEditor.cpp
-#include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
-VisualGranularSynthAudioProcessorEditor::VisualGranularSynthAudioProcessorEditor (VisualGranularSynthAudioProcessor& p)
+ArtefactAudioProcessorEditor::ArtefactAudioProcessorEditor (ArtefactAudioProcessor& p)
     : AudioProcessorEditor (&p), processorRef (p)
 {
-    auto& params = processorRef.getParameters();
+    // --- LOAD FONT ---
+    auto typeface = juce::Typeface::createSystemTypefaceFor(BinaryData::SilkscreenRegular_ttf, BinaryData::SilkscreenRegular_ttfSize);
+    pixelFont = juce::Font(typeface);
+    pixelFont.setHeight(14.0f);
 
-    // Grain Size
-    grainSizeSlider.setSliderStyle (juce::Slider::Rotary);
-    grainSizeSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 20);
-    addAndMakeVisible (grainSizeSlider);
-    grainSizeAttachment.reset (new Attachment (processorRef.parameters, "grainSize", grainSizeSlider));
+    // --- CANVAS ---
+    canvas = std::make_unique<juce::ImageComponent>("Canvas");
+    auto canvasImage = juce::ImageFileFormat::loadFrom(BinaryData::The_Grid_jpeg, BinaryData::The_Grid_jpegSize);
+    if (canvasImage.isValid())
+        canvas->setImage(canvasImage, juce::RectanglePlacement::stretchToFit);
+    addAndMakeVisible(*canvas);
 
-    // Pitch
-    pitchSlider.setSliderStyle (juce::Slider::Rotary);
-    pitchSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 20);
-    addAndMakeVisible (pitchSlider);
-    pitchAttachment.reset (new Attachment (processorRef.parameters, "pitch", pitchSlider));
+    // --- SAMPLER SLOTS ---
+    for (int i = 0; i < 8; ++i)
+    {
+        auto slotButton = std::make_unique<juce::TextButton>("[SLOT " + juce::String(i + 1) + "]");
+        slotButton->setClickingTogglesState(true);
+        slotButton->setRadioGroupId(1); // Makes them act like radio buttons
+        slotButton->setColour(juce::TextButton::textColourOnId, juce::Colours::yellow);
+        slotButton->setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2a2a2a));
+        slotButton->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2a2a));
+        addAndMakeVisible(*slotButton);
+        samplerSlots.add(std::move(slotButton));
+    }
+    samplerSlots[0]->setToggleState(true, juce::dontSendNotification);
 
-    // Density
-    densitySlider.setSliderStyle (juce::Slider::Rotary);
-    densitySlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 20);
-    addAndMakeVisible (densitySlider);
-    densityAttachment.reset (new Attachment (processorRef.parameters, "density", densitySlider));
+    // --- KNOBS ---
+    auto createKnob = [&](std::unique_ptr<juce::Slider>& knob, const juce::String& text)
+    {
+        knob = std::make_unique<juce::Slider>(juce::Slider::SliderStyle::RotaryHorizontalVerticalDrag, juce::Slider::TextEntryBoxPosition::NoTextBox);
+        knob->setLookAndFeel(&lookAndFeel);
+        addAndMakeVisible(*knob);
+    };
+    createKnob(driveKnob, "DRIVE");
+    createKnob(crushKnob, "CRUSH");
+    createKnob(filterKnob, "FILTER");
+    createKnob(jitterKnob, "JITTER");
 
-    // Randomness
-    randomnessSlider.setSliderStyle (juce::Slider::Rotary);
-    randomnessSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 20);
-    addAndMakeVisible (randomnessSlider);
-    randomnessAttachment.reset (new Attachment (processorRef.parameters, "randomness", randomnessSlider));
+    // --- LABELS ---
+    auto createLabel = [&](std::unique_ptr<juce::Label>& label, const juce::String& text) {
+        label = std::make_unique<juce::Label>("", text);
+        label->setFont(pixelFont);
+        label->setColour(juce::Label::textColourId, juce::Colours::cyan);
+        label->setJustificationType(juce::Justification::centred);
+        addAndMakeVisible(*label);
+    };
+    createLabel(driveLabel, "DRIVE");
+    createLabel(crushLabel, "CRUSH");
+    createLabel(filterLabel, "FILTER");
+    createLabel(jitterLabel, "JITTER");
+    
+    // --- ATTACHMENTS (Links knobs to parameters) ---
+    driveAttachment = std::make_unique<SliderAttachment>(processorRef.apvts, "DRIVE", *driveKnob);
+    crushAttachment = std::make_unique<SliderAttachment>(processorRef.apvts, "CRUSH", *crushKnob);
+    filterAttachment = std::make_unique<SliderAttachment>(processorRef.apvts, "FILTER", *filterKnob);
+    jitterAttachment = std::make_unique<SliderAttachment>(processorRef.apvts, "JITTER", *jitterKnob);
 
-    setSize (400, 260);
+    setSize (800, 600);
 }
 
-VisualGranularSynthAudioProcessorEditor::~VisualGranularSynthAudioProcessorEditor() = default;
-
-void VisualGranularSynthAudioProcessorEditor::paint (juce::Graphics& g)
+ArtefactAudioProcessorEditor::~ArtefactAudioProcessorEditor()
 {
-    g.fillAll (juce::Colours::darkslategrey);
+    // Unset the look and feel to avoid dangling pointers
+    driveKnob->setLookAndFeel(nullptr);
+    crushKnob->setLookAndFeel(nullptr);
+    filterKnob->setLookAndFeel(nullptr);
+    jitterKnob->setLookAndFeel(nullptr);
 }
 
-void VisualGranularSynthAudioProcessorEditor::resized()
+void ArtefactAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    auto area = getLocalBounds().reduced (20);
-    auto knobW = 60;
-    auto spacing = (area.getWidth() - 4 * knobW) / 3;
+    g.fillAll (juce::Colour(0xff2a2a2a)); // Dark charcoal background
 
-    grainSizeSlider .setBounds (area.removeFromLeft (knobW));
-    area.removeFromLeft (spacing);
-    pitchSlider     .setBounds (area.removeFromLeft (knobW));
-    area.removeFromLeft (spacing);
-    densitySlider   .setBounds (area.removeFromLeft (knobW));
-    area.removeFromLeft (spacing);
-    randomnessSlider.setBounds (area.removeFromLeft (knobW));
+    // Add a subtle noise layer
+    juce::Random rand;
+    for (int i = 0; i < 2000; ++i)
+    {
+        g.setColour(juce::Colour(0x08ffffff)); // Very transparent white
+        g.setPixel(rand.nextInt(getWidth()), rand.nextInt(getHeight()));
+    }
 }
 
-bool VisualGranularSynthAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
+void ArtefactAudioProcessorEditor::resized()
 {
-    for (auto& f : files)
-        if (f.endsWithIgnoreCase (".wav") || f.endsWithIgnoreCase (".aiff") || f.endsWithIgnoreCase (".mp3"))
-            return true;
-    return false;
-}
+    juce::Rectangle<int> bounds = getLocalBounds().reduced(10);
+    
+    // Main layout
+    juce::FlexBox mainBox;
+    mainBox.flexDirection = juce::FlexBox::Direction::row;
 
-void VisualGranularSynthAudioProcessorEditor::filesDropped (const juce::StringArray& files, int, int)
-{
-    if (files.size() > 0)
-        processorRef.loadSample (juce::File { files[0] });
+    // Left Column
+    juce::FlexBox canvasBox;
+    canvasBox.flexDirection = juce::FlexBox::Direction::column;
+    canvasBox.items.add(juce::FlexItem(*canvas).withFlex(1.0f)); // Canvas takes all vertical space
+    mainBox.items.add(juce::FlexItem(canvasBox).withFlex(0.65f)); // Canvas box takes 65% of width
+
+    // Right Column
+    juce::FlexBox rightColumnBox;
+    rightColumnBox.flexDirection = juce::FlexBox::Direction::column;
+    
+    juce::FlexBox slotBox;
+    slotBox.flexDirection = juce::FlexBox::Direction::column;
+    for(auto& slot : samplerSlots)
+        slotBox.items.add(juce::FlexItem(*slot).withFlex(1.0f).withMargin(2));
+    
+    juce::FlexBox knobBox;
+    knobBox.flexDirection = juce::FlexBox::Direction::row;
+    
+    auto createKnobItem = [&](juce::Slider& knob, juce::Label& label) {
+        juce::FlexBox itemBox;
+        itemBox.flexDirection = juce::FlexBox::Direction::column;
+        itemBox.items.add(juce::FlexItem(knob).withFlex(0.8f));
+        itemBox.items.add(juce::FlexItem(label).withFlex(0.2f));
+        return juce::FlexItem(itemBox).withFlex(1.0f);
+    };
+
+    knobBox.items.add(createKnobItem(*driveKnob, *driveLabel));
+    knobBox.items.add(createKnobItem(*crushKnob, *crushLabel));
+    knobBox.items.add(createKnobItem(*filterKnob, *filterLabel));
+    knobBox.items.add(createKnobItem(*jitterKnob, *jitterLabel));
+
+    rightColumnBox.items.add(juce::FlexItem(slotBox).withFlex(0.6f));
+    rightColumnBox.items.add(juce::FlexItem(knobBox).withFlex(0.4f).withMargin(juce::FlexItem::Margin(10,0,0,0)));
+
+    mainBox.items.add(juce::FlexItem(rightColumnBox).withFlex(0.35f).withMargin(juce::FlexItem::Margin(0,0,0,10)));
+
+    mainBox.performLayout(bounds);
 }

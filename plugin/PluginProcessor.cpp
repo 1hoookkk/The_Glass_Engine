@@ -1,92 +1,75 @@
-// PluginProcessor.cpp
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-VisualGranularSynthAudioProcessor::VisualGranularSynthAudioProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+ArtefactAudioProcessor::ArtefactAudioProcessor()
+     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+       apvts(*this, nullptr, "Parameters", createParameterLayout())
 {
 }
 
-VisualGranularSynthAudioProcessor::~VisualGranularSynthAudioProcessor() = default;
+ArtefactAudioProcessor::~ArtefactAudioProcessor() {}
+const juce::String ArtefactAudioProcessor::getName() const { return JucePlugin_Name; }
+bool ArtefactAudioProcessor::acceptsMidi() const { return true; }
+bool ArtefactAudioProcessor::producesMidi() const { return false; }
+bool ArtefactAudioProcessor::isMidiEffect() const { return false; }
+double ArtefactAudioProcessor::getTailLengthSeconds() const { return 0.0; }
+int ArtefactAudioProcessor::getNumPrograms() { return 1; }
+int ArtefactAudioProcessor::getCurrentProgram() { return 0; }
+void ArtefactAudioProcessor::setCurrentProgram (int index) { juce::ignoreUnused (index); }
+const juce::String ArtefactAudioProcessor::getProgramName (int index) { juce::ignoreUnused (index); return {}; }
+void ArtefactAudioProcessor::changeProgramName (int index, const juce::String& newName) { juce::ignoreUnused (index, newName); }
+void ArtefactAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock) {}
+void ArtefactAudioProcessor::releaseResources() {}
 
-void VisualGranularSynthAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+#ifndef JucePlugin_PreferredChannelConfigurations
+bool ArtefactAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    granularEngine.prepare (sampleRate, samplesPerBlock);
-
-    if (! sampleLoaded.load())
-    {
-        // Create a 2-second sine test buffer if none loaded
-        fileBuffer.setSize (2, static_cast<int> (sampleRate * 2.0));
-        fileBuffer.clear();
-
-        for (int ch = 0; ch < fileBuffer.getNumChannels(); ++ch)
-        {
-            auto* data = fileBuffer.getWritePointer (ch);
-            for (int i = 0; i < fileBuffer.getNumSamples(); ++i)
-            {
-                float phase = (float) i / (float) sampleRate;
-                data[i] = 0.7f * std::sin (juce::MathConstants<float>::twoPi * 440.0f * phase);
-            }
-        }
-
-        sampleLoaded.store (true);
-    }
-
-    // Hand off to engine under lock
-    {
-        const juce::ScopedLock sl (bufferLock);
-        granularEngine.setSourceBuffer (fileBuffer);
-    }
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
+     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
+    return true;
 }
+#endif
 
-void VisualGranularSynthAudioProcessor::releaseResources()
+void ArtefactAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiMessages& midiMessages)
 {
-    granularEngine.reset();
-}
-
-bool VisualGranularSynthAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
-{
-    auto out = layouts.getMainOutputChannelSet();
-    return out == juce::AudioChannelSet::mono()
-        || out == juce::AudioChannelSet::stereo();
-}
-
-void VisualGranularSynthAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
-                                                      juce::MidiBuffer& /*midi*/)
-{
-    juce::ScopedNoDenormals noDenormals;
-    const juce::ScopedLock sl (bufferLock);
-
     buffer.clear();
-    granularEngine.process (buffer);
 }
 
-void VisualGranularSynthAudioProcessor::loadSample (const juce::File& file)
+bool ArtefactAudioProcessor::hasEditor() const { return true; }
+juce::AudioProcessorEditor* ArtefactAudioProcessor::createEditor()
 {
-    juce::AudioFormatManager fm;
-    fm.registerBasicFormats();
-    if (auto* reader = fm.createReaderFor (file))
-    {
-        const juce::ScopedLock sl (bufferLock);
-
-        fileBuffer.setSize ((int) reader->numChannels, (int) reader->lengthInSamples);
-        reader->read (&fileBuffer,
-                      0, (int) reader->lengthInSamples, 0,
-                      true, true);
-
-        fileSampleRate = reader->sampleRate;
-        sampleLoaded.store (true);
-        granularEngine.setSourceBuffer (fileBuffer);
-    }
+    return new ArtefactAudioProcessorEditor (*this);
 }
 
-juce::AudioProcessorEditor* VisualGranularSynthAudioProcessor::createEditor()
+void ArtefactAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    return new VisualGranularSynthAudioProcessorEditor (*this);
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
 }
 
-// This creates new instances of the plugin
+void ArtefactAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+    if (xmlState.get() != nullptr)
+        if (xmlState->hasTagName (apvts.state.getType()))
+            apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+}
+
+juce::AudioProcessorValueTreeState::ParameterLayout ArtefactAudioProcessor::createParameterLayout()
+{
+    juce::AudioProcessorValueTreeState::ParameterLayout layout;
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>("DRIVE", "Drive", 0.0f, 1.0f, 0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>("CRUSH", "Crush", 0.0f, 1.0f, 0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>("FILTER", "Filter", 0.0f, 1.0f, 1.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>("JITTER", "Jitter", 0.0f, 1.0f, 0.0f));
+
+    return layout;
+}
+
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new VisualGranularSynthAudioProcessor();
+    return new ArtefactAudioProcessor();
 }
